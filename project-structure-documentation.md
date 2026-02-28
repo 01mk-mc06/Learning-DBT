@@ -1,8 +1,7 @@
-# dbt Exercise: Project Structure Documentation
+# dbt Exercise 6: Project Structure Documentation
 
 **Stack:** dbt Core 1.11.6 | Snowflake | Windows 11  
-**Author:** King | **Date:** February 2026 |
-**Duration:** More than 2 hours debugging
+**Author:** King | **Date:** February 2026
 
 ---
 
@@ -442,6 +441,72 @@ select * from dbt_db.raw_intermediate.int_customer_orders;
 -- marts
 select * from dbt_db.raw_marts.mart_customer_summary;
 ```
+
+---
+
+## YAML Whitespace Debugging Guide
+
+YAML is extremely sensitive to whitespace. Most cryptic YAML errors trace back to one of these:
+
+### Priority Order for YAML Debugging
+```
+1. Tabs instead of spaces
+2. Inconsistent indentation levels
+3. Double spaces after colons
+4. Trailing spaces at end of lines
+5. Missing quotes around special characters
+```
+
+### 1. Tabs vs Spaces
+```yaml
+#  Correct — 2 spaces
+models:
+  - name: stg_customers
+    columns:
+      - name: customer_id
+
+#  Wrong — tabs look identical but break YAML
+models:
+	- name: stg_customers
+		columns:
+```
+**Fix in VS Code:** `Ctrl + Shift + P` → **"Convert Indentation to Spaces"**
+
+### 2. Double Spaces After Colon
+```yaml
+#  Correct
+description: "Customer data"
+
+#  Wrong — double space after colon
+description:  "Customer data"
+```
+
+### 3. Trailing Spaces
+```yaml
+name: stg_customers·····   ← trailing spaces, dirty but harmless
+```
+**Fix in VS Code:** `Ctrl + Shift + P` → **"Trim Trailing Whitespace"**
+
+**Auto-fix on save** — add to VS Code settings:
+```json
+"files.trimTrailingWhitespace": true
+"editor.detectIndentation": false,
+"editor.insertSpaces": true,
+"editor.tabSize": 2
+```
+
+### 4. Reveal Hidden Whitespace
+`Ctrl + Shift + P` → **"Toggle Render Whitespace"**
+- Spaces show as faint dots `·`
+- Tabs show as arrows `→`
+
+### YAML vs SQL Rules
+
+| File Type | Tabs Allowed | Spaces Required |
+|---|---|---|
+| `.yml` / `.yaml` |  Never |  2 spaces always |
+| `dbt_project.yml` |  Never |  2 spaces always |
+| `.sql` |  Works |  4 spaces preferred |
 
 ---
 
