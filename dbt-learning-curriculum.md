@@ -6,7 +6,7 @@
 
 ---
 
-##  Beginner (Exercises 1–10)
+##  Beginner
 
 | # | Topic | What You'll Learn |
 |---|---|---|
@@ -23,7 +23,7 @@
 
 ---
 
-##  Intermediate (Exercises 11–20)
+##  Intermediate
 
 | # | Topic | What You'll Learn |
 |---|---|---|
@@ -40,7 +40,7 @@
 
 ---
 
-##  Advanced (Exercises 21–32)
+##  Advanced
 
 | # | Topic | What You'll Learn |
 |---|---|---|
