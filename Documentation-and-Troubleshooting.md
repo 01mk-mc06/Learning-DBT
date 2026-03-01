@@ -1,4 +1,4 @@
-# dbt Exercises 1–5: Full Documentation
+# dbt Exercise Full Documentation
 
 **Stack:** dbt Core 1.11.6 | Snowflake | Windows 11 | Python 3.11.9  
 **Date:** February 2026 | **Author:** King
