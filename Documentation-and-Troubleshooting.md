@@ -1,11 +1,11 @@
-# dbt Exercise Full Documentation
+# dbt Troubleshooting Documentation
 
 **Stack:** dbt Core 1.11.6 | Snowflake | Windows 11 | Python 3.11.9  
 **Date:** February 2026 | **Author:** King
 
 ---
 
-## Exercise 1: Your First Model 
+## First Model 
 
 ### What We Did
 - Created `seeds/Raw/raw_customers.csv` with 5 rows
@@ -30,7 +30,7 @@ select * from dbt_db.raw.stg_customers;
 
 ---
 
-## Exercise 2: Materializations 
+## Materializations 
 
 ### Four Materialization Types
 
@@ -151,7 +151,7 @@ sources:
 
 ---
 
-## Exercise 4: Built-in Tests 
+## Built-in Tests 
 
 ### Four Built-in Tests
 
@@ -227,7 +227,7 @@ select * from dbt_db.dbt_test__audit.accepted_values_stg_customers_status;
 
 ---
 
-## Exercise 5: Documentation 
+## Documentation 
 
 ### What We Did
 - Added rich descriptions to `schema.yml` for models and columns
