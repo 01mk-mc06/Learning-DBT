@@ -1,4 +1,4 @@
-# dbt Exercise 6: Project Structure Documentation
+Project Structure Documentation
 
 **Stack:** dbt Core 1.11.6 | Snowflake | Windows 11  
 **Author:** King | **Date:** February 2026
