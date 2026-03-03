@@ -1,0 +1,562 @@
+# dbt Summary & Reference
+
+**Stack:** dbt Core 1.11.6 | Snowflake | Windows 11  
+**Author:** King | **Date:** March 2026
+
+---
+
+## Snapshots — SCD Type 2 
+
+### Concept
+Snapshots track the **full history** of data changes — every version of a record is preserved with timestamps.
+
+```
+Without snapshots:  customer_id=1, status='inactive'  ← old data gone forever
+With snapshots:     Row 1: status='active',   valid_from=2024-01-01, valid_to=2024-06-01
+                    Row 2: status='inactive', valid_from=2024-06-01, valid_to=null
+```
+
+### Snapshot File Structure
+```sql
+{% snapshot customers_snapshot %}
+
+{{
+    config(
+        target_schema='snapshots',
+        unique_key='customer_id',      -- must be unique_key not unique_id
+        strategy='check',
+        check_cols=['status', 'email']
+    )
+}}
+
+select
+    id as customer_id,
+    first_name,
+    last_name,
+    email,
+    status,
+    created_at
+from {{ source('raw', 'raw_customers') }}
+
+{% endsnapshot %}
+```
+
+### dbt_project.yml Snapshot Config
+```yaml
+snapshots:
+  dbt_learning:
+    +target_schema: snapshots
+    +tags: ['snapshot', 'daily']
+    +meta:
+      owner: 'King'
+      team: 'analytics'
+      priority: 'high'
+```
+
+### snapshots_schema.yml
+```yaml
+version: 2
+
+snapshots:
+  - name: customers_snapshot
+    description: "SCD Type 2 history of customer changes."
+    columns:
+      - name: dbt_scd_id
+        description: "Unique ID per snapshot row"
+        tests:
+          - unique
+          - not_null
+      - name: dbt_valid_from
+        description: "When this version became active"
+        tests:
+          - not_null
+      - name: dbt_valid_to
+        description: "When this version expired. Null = current record"
+```
+
+### Auto-generated Snapshot Columns
+| Column | Meaning |
+|---|---|
+| `dbt_scd_id` | Unique ID per snapshot row |
+| `dbt_updated_at` | When row was last updated |
+| `dbt_valid_from` | When this version became active |
+| `dbt_valid_to` | When expired — null = current |
+
+### Two Strategies
+| Strategy | Use when |
+|---|---|
+| `check` + `check_cols` | No updated_at column in source |
+| `timestamp` + `updated_at` | Source has reliable updated_at column |
+
+### Verification Queries
+```sql
+-- All records
+select * from dbt_db.raw_snapshots.customers_snapshot
+order by customer_id, dbt_valid_from;
+
+-- Current records only
+select * from dbt_db.raw_snapshots.customers_snapshot
+where dbt_valid_to is null;
+
+-- Full history for one customer
+select * from dbt_db.raw_snapshots.customers_snapshot
+where customer_id = 1
+order by dbt_valid_from;
+
+-- Status on a specific date
+select * from dbt_db.raw_snapshots.customers_snapshot
+where customer_id = 1
+and dbt_valid_from <= '2024-03-01'
+and (dbt_valid_to > '2024-03-01' or dbt_valid_to is null);
+```
+
+### Commands
+```bash
+dbt snapshot                              # run all snapshots
+dbt snapshot --select customers_snapshot  # run one snapshot
+```
+
+### Key Nuances
+- `strategy` and `unique_key` MUST be in the snapshot file — cannot be set in `dbt_project.yml`
+- `dbt_project.yml` handles: `target_schema`, `tags`, `meta`, `enabled`
+- Snapshots are always materialized as **tables** — never views
+- `dbt_valid_to = null` = current active record
+- Don't test `unique` on `customer_id` — multiple rows per customer is expected
+- Run snapshots frequently — dbt only captures state at run time
+- First run builds full table — subsequent runs only add changed rows
+- dbt fully manages snapshot history — you just run it on schedule
+
+### Errors & Fixes
+| Error | Cause | Fix |
+|---|---|---|
+| `Snapshots must be configured with strategy and unique_key` | Typo — `unique_id` instead of `unique_key` | Change to `unique_key` |
+| `Schema does not exist` | Snowflake schema not created | `create schema if not exists dbt_db.raw_snapshots` |
+| `meta` deprecation warning | Missing `+` prefix on nested meta keys | Add `+` to `owner`, `team`, `priority` |
+
+---
+
+## Macros 
+
+### Concept
+Macros are **reusable SQL functions** — define once, call anywhere.
+
+### Macro Structure
+```sql
+{% macro macro_name(argument) %}
+    -- your SQL here
+    {{ argument }}
+{% endmacro %}
+```
+
+### Three Macros Built
+
+**is_active.sql:**
+```sql
+{% macro is_active(column_name) %}
+    case when {{ column_name }} = 'active' then true else false end
+{% endmacro %}
+```
+
+**cents_to_dollars.sql:**
+```sql
+{% macro cents_to_dollars(column_name, decimal_places=2) %}
+    round({{ column_name }} / 100, {{ decimal_places }})
+{% endmacro %}
+```
+
+**generate_surrogate_key.sql:**
+```sql
+{% macro generate_surrogate_key(columns) %}
+    md5(
+        {% for col in columns %}
+            coalesce(cast({{ col }} as varchar), '')
+            {% if not loop.last %} || '-' || {% endif %}
+        {% endfor %}
+    )
+{% endmacro %}
+```
+
+### Surrogate Key Explained
+- `md5()` — converts combined columns into fixed 32-char hash
+- `coalesce(..., '')` — prevents NULL from breaking the hash
+- `|| '-' ||` — separator between columns prevents hash collisions
+- `{% if not loop.last %}` — no separator after last column
+
+### When to Use Surrogate Keys
+| Situation | Need Surrogate Key? |
+|---|---|
+| Table has reliable natural primary key |  No |
+| Joining multiple sources with conflicting IDs |  Yes |
+| Mart/aggregate with no single unique column |  Yes |
+| SCD Type 2 snapshot rows |  Yes |
+
+### yml Updates for Macros
+- `dbt_project.yml`  — not needed
+- `sources.yml`  — not needed
+- `schema.yml`  — not needed
+- Optional `macros/macros.yml` for documentation only
+
+### Commands
+```bash
+dbt compile --select model_name   # see compiled macro output
+```
+
+---
+
+## dbt Packages 
+
+### packages.yml (project root)
+```yaml
+packages:
+  - package: dbt-labs/dbt_utils
+    version: 1.3.0
+  - package: calogica/dbt_expectations
+    version: 0.10.4
+```
+
+```bash
+dbt deps   # install packages — run after every dbt clean
+```
+
+### dbt_utils Macros Available (v1.3.0)
+| Macro | Use |
+|---|---|
+| `dbt_utils.generate_surrogate_key()` | Better surrogate key — use instead of custom |
+| `dbt_utils.star()` | Select all columns except specified |
+| `dbt_utils.date_spine()` | Generate date series |
+| `dbt_utils.safe_divide()` | Division that returns null instead of error |
+| ~~`dbt_utils.pivot()`~~ | Removed in v1.3.0 — not available |
+
+### dbt_expectations Tests
+```yaml
+# Value range check
+- dbt_expectations.expect_column_values_to_be_between:
+    min_value: 0
+    max_value: 10000
+
+# Regex match
+- dbt_expectations.expect_column_values_to_match_regex:
+    regex: '^[a-zA-Z0-9_.+]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.]+$'
+
+# Not null with threshold
+- dbt_expectations.expect_column_values_to_not_be_null:
+    mostly: 0.95
+```
+
+### date_spine Model (correct format)
+```sql
+{{ config(materialized='view') }}
+
+{{ dbt_utils.date_spine(
+    datepart="day",
+    start_date="cast('2024-01-01' as date)",
+    end_date="cast('2024-12-31' as date)"
+) }}
+```
+
+### Errors & Fixes
+| Error | Cause | Fix |
+|---|---|---|
+| `No packages were found` | `packages.yml` in wrong folder | Move to project root — same level as `dbt_project.yml` |
+| `pivot macro not found` | Removed in dbt_utils 1.3.0 | Skip — use Jinja loop instead |
+| `syntax error unexpected 'with'` | `select * from` wrapper around `date_spine` | Remove wrapper — `date_spine` generates full query |
+| Regex `invalid character class` | `-.` in character class | Move `-` to end: `[a-zA-Z0-9-]` not `[a-zA-Z0-9-.]` |
+| YAML parse error on schema | Snippet added without parent structure | Always wrap columns inside full `version: 2 / models:` structure |
+
+### Key Nuances
+- Always pin package versions — never use `latest` in production
+- Run `dbt deps` after every `dbt clean` — packages get deleted with clean
+- Call package macros with `{{ package_name.macro_name() }}`
+
+---
+
+## Hooks 
+
+### Four Hook Types
+| Hook | Level | Runs |
+|---|---|---|
+| `on-run-start` | Pipeline | Once before entire run |
+| `on-run-end` | Pipeline | Once after entire run |
+| `pre-hook` | Model | Before each model |
+| `post-hook` | Model | After each model |
+| Global `+post-hook` | Model (defined globally) | After every model — one definition |
+
+### dbt_project.yml Hook Config
+```yaml
+on-run-start:
+  - "create table if not exists dbt_db.raw.dbt_run_log (run_id varchar, model_name varchar, status varchar, run_at timestamp)"
+  - "insert into dbt_db.raw.dbt_run_log values ('{{ invocation_id }}', 'PIPELINE', 'started', current_timestamp())"
+
+on-run-end:
+  - "insert into dbt_db.raw.dbt_run_log values ('{{ invocation_id }}', 'PIPELINE', 'completed', current_timestamp())"
+
+models:
+  dbt_learning:
+    +post-hook:
+      - "insert into dbt_db.raw.dbt_run_log values ('{{ invocation_id }}', '{{ this.name }}', 'success', current_timestamp())"
+```
+
+### Model-level Hook
+```sql
+{{ config(
+    materialized='table',
+    pre_hook="create or replace temp table temp_active_customers as select customer_id from dbt_db.raw_staging.stg_customers where status = 'active'",
+    post_hook="grant select on {{ this }} to role sysadmin"
+) }}
+```
+
+### Hook Variables
+| Variable | Value |
+|---|---|
+| `{{ this }}` | Full table reference |
+| `{{ this.name }}` | Model name only |
+| `{{ this.schema }}` | Schema name only |
+| `{{ invocation_id }}` | Unique ID for current dbt run |
+
+### What Your Run Log Shows
+```
+invocation_id | model_name            | status    | run_at
+abc123        | PIPELINE              | started   | 2024-01-01 02:00:00
+abc123        | stg_customers         | success   | 2024-01-01 02:00:05
+abc123        | mart_customer_summary | success   | 2024-01-01 02:00:11
+abc123        | PIPELINE              | completed | 2024-01-01 02:00:12
+```
+
+### Checking Pre-hook Temp Table
+Temp tables exist only during the session — verify via:
+1. `dbt run --debug` — look for pre-hook SQL in output
+2. Snowflake Query History → filter by `dbt_wh` → look for `CREATE OR REPLACE TEMP TABLE`
+3. Add post-hook that counts rows and writes to log table
+
+### Key Nuances
+- `on-run-start/end` are already global — define once in `dbt_project.yml`
+- `{{ this }}` only available in model-level hooks — not `on-run-start/end`
+- Global `+post-hook` = per model logging without touching individual files
+- Failed hooks don't automatically fail the model
+- Hooks run in array order — list multiple as array
+
+---
+
+## Custom Generic Tests 
+
+### Concept
+Reusable tests defined in `macros/` — called in `schema.yml` like built-in tests.
+
+### Golden Rule
+**Zero rows returned = PASS. Any rows returned = FAIL.**
+Write WHERE clause to find the **bad rows**.
+
+### Four Tests Built
+
+**test_not_negative.sql:**
+```sql
+{% test not_negative(model, column_name) %}
+select {{ column_name }} as failing_value
+from {{ model }}
+where {{ column_name }} < 0
+{% endtest %}
+```
+
+**test_minimum_value.sql:**
+```sql
+{% test minimum_value(model, column_name, min_val) %}
+select {{ column_name }} as failing_value
+from {{ model }}
+where {{ column_name }} < {{ min_val }}
+{% endtest %}
+```
+
+**test_max_length.sql:**
+```sql
+{% test max_length(model, column_name, max_len) %}
+select {{ column_name }} as failing_value
+from {{ model }}
+where length({{ column_name }}) > {{ max_len }}
+{% endtest %}
+```
+
+**test_no_future_dates.sql:**
+```sql
+{% test no_future_dates(model, column_name) %}
+select {{ column_name }} as failing_value
+from {{ model }}
+where {{ column_name }} > current_date()
+{% endtest %}
+```
+
+### Calling Custom Tests in schema.yml
+```yaml
+- name: amount
+  tests:
+    - not_negative
+    - minimum_value:
+        min_val: 1
+- name: full_name
+  tests:
+    - max_length:
+        max_len: 100
+- name: created_at
+  tests:
+    - no_future_dates
+```
+
+### yml Updates for Custom Generic Tests
+- `dbt_project.yml`  — not needed
+- `sources.yml`  — not needed
+- `schema.yml`  — where you CALL the test on a column
+- Own schema file  — test definition lives in `macros/`
+
+### Key Nuances
+- Named `test_*.sql` in `macros/` folder
+- First two arguments always `model` and `column_name` — required by dbt
+- Additional arguments go after
+- dbt auto-scans macros folder — no registration needed
+
+---
+
+## Custom Singular Tests 
+
+### Concept
+One-off SQL tests for specific **cross-layer business rules** — not reusable.
+
+### Custom Generic vs Singular
+| | Custom Generic | Singular |
+|---|---|---|
+| Lives in | `macros/` | `tests/` |
+| Reusable |  Yes |  No |
+| Called in | `schema.yml` | Auto-scanned |
+| Use for | Common patterns | Unique business rules |
+
+### Four Tests Built
+
+**assert_orders_have_valid_customers.sql:**
+```sql
+select o.order_id, o.customer_id
+from {{ ref('stg_orders') }} o
+left join {{ ref('stg_customers') }} c
+    on o.customer_id = c.customer_id
+where c.customer_id is null
+```
+
+**assert_mart_totals_match_orders.sql:**
+```sql
+with staging_total as (
+    select sum(amount) as total
+    from {{ ref('stg_orders') }}
+),
+mart_total as (
+    select sum(total_spent) as total
+    from {{ ref('mart_customer_summary') }}
+)
+select s.total as staging_total, m.total as mart_total
+from staging_total s
+cross join mart_total m
+where s.total != m.total
+```
+
+**assert_no_duplicate_orders.sql:**
+```sql
+select
+    customer_id,
+    product_name,
+    cast(created_at as date) as order_date,
+    count(*) as order_count
+from {{ ref('stg_orders') }}
+group by 1, 2, 3
+having count(*) > 1
+```
+
+**assert_all_active_customers_in_mart.sql:**
+```sql
+with active_customer as (
+    select customer_id, status
+    from {{ ref('stg_customers') }}
+    where status = 'active'
+)
+select a.customer_id, a.status
+from active_customer a
+left join {{ ref('mart_customer_summary') }} m
+    on a.customer_id = m.customer_id
+where m.customer_id is null
+```
+
+### Cross-layer Validation Pattern
+```
+Bronze/Raw
+      ↓ did all records make it through?
+Silver/Staging     ← assert_orders_have_valid_customers
+      ↓ did the math stay consistent?
+Gold/Mart          ← assert_mart_totals_match_orders
+                   ← assert_all_active_customers_in_mart
+```
+
+### Test in Snowflake First
+Replace `ref()` with full table paths to validate logic before adding to dbt:
+```sql
+-- Example
+from dbt_db.raw_staging.stg_orders   -- instead of ref('stg_orders')
+from dbt_db.raw_marts.mart_customer_summary  -- instead of ref('mart_customer_summary')
+```
+
+### When Test Fails — Investigation
+```bash
+dbt test --store-failures --select assert_orders_have_valid_customers
+```
+```sql
+select * from dbt_db.dbt_test__audit.assert_orders_have_valid_customers;
+```
+
+### Errors & Fixes
+| Error | Cause | Fix |
+|---|---|---|
+| `does not match any enabled nodes` | Typo in filename | Check `dir tests\` — rename file |
+| `invalid identifier ORDER_STATUS` | Wrong column name | Use `status` not `order_status` in stg_orders |
+| CTE syntax error | Missing `as` keyword | `with cte_name as (` not `with cte_name (` |
+| Test fails with 2 results | Real data issue | Investigate with Snowflake query or `--store-failures` |
+
+### Key Nuances
+- Named `assert_*.sql` by convention
+- No schema.yml entry needed — dbt auto-scans `tests/` folder
+- No macro syntax — plain SQL with `ref()`
+- Can join multiple models — perfect for cross-layer validation
+- Always test SQL in Snowflake first with hardcoded paths before adding to dbt
+
+---
+
+## Global Commands Reference
+
+```bash
+# Snapshots
+dbt snapshot
+dbt snapshot --select snapshot_name
+
+# Packages
+dbt deps                              # install packages
+
+# Hooks verification
+select * from dbt_db.raw.dbt_run_log order by run_at desc;
+
+# Tests
+dbt test --no-partial-parse
+dbt test --no-partial-parse --select model_name
+dbt test --no-partial-parse --store-failures
+dbt test --no-partial-parse --select assert_test_name
+
+# Compile to check generated SQL
+dbt compile --no-partial-parse --select model_name
+```
+
+---
+
+## Test Types — Full Reference
+
+| Type | Location | Reusable | yml needed | Use for |
+|---|---|---|---|---|
+| Built-in | dbt core |  | schema.yml | unique, not_null, accepted_values, relationships |
+| dbt_expectations | packages |  | schema.yml | Advanced checks — regex, range, threshold |
+| Custom generic | `macros/` |  | schema.yml | Your own reusable rules |
+| Singular | `tests/` |  | None | Cross-layer business rules |
+
+---
+
+*dbt Exercises Summary | King | March 2026*
